@@ -592,7 +592,7 @@ h1, h2, h3, .font-outfit {
 .font-semibold { font-weight: 600 !important; }
 .font-bold { font-weight: 700 !important; }
 .font-extrabold { font-weight: 800 !important; }
-.leading-none { tragic-line-height: 1 !important; line-height: 1 !important; }
+.leading-none { line-height: 1 !important; }
 
 .tracking-wider { letter-spacing: 0.05em !important; }
 .tracking-widest { letter-spacing: 0.1em !important; }
