@@ -1,18 +1,16 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Table } from './components/Table';
-import { Hand } from './components/Hand';
 import { Chips } from './components/Chips';
 import { Controls } from './components/Controls';
 import { History } from './components/History';
 import { Confetti } from './components/Confetti';
-import { Card, Hand as HandType, GameStage, RoundResult } from './game/types';
+import { Card, GameStage, RoundResult, PlayerState } from './game/types';
 import { buildShoe, shuffle, draw } from './game/deck';
 import { calculateHand } from './game/score';
 import { evaluateOutcome, shouldDealerHit } from './game/rules';
 import {
   playCardSound,
   playWinSound,
-  playBlackjackSound,
   playLoseSound,
   playPushSound,
   playClickSound,
@@ -22,448 +20,720 @@ const INITIAL_BALANCE = 1000;
 const SHOE_RESHUFFLE_THRESHOLD = 78; // 6 decks (312 cards) * 0.25 remaining = 78 cards
 
 export const App: React.FC = () => {
-  // --- Game State ---
-  const [balance, setBalance] = useState<number>(() => {
-    const saved = localStorage.getItem('bj_balance');
-    return saved ? parseInt(saved, 10) : INITIAL_BALANCE;
-  });
+  // --- Game Settings & Stages ---
+  const [stage, setStage] = useState<GameStage>('SETUP');
+  const [numPlayers, setNumPlayers] = useState<number>(1);
+  const [winLimit, setWinLimit] = useState<number>(5000);
+  const [players, setPlayers] = useState<PlayerState[]>([]);
   
-  const [currentBet, setCurrentBet] = useState<number>(0);
-  const [previousBet, setPreviousBet] = useState<number>(0);
+  // --- Active Indices for turn tracking ---
+  const [activeBettorIndex, setActiveBettorIndex] = useState<number>(0);
+  const [currentPlayerIndex, setCurrentPlayerIndex] = useState<number>(0);
+  const [dealerPlayerIndex, setDealerPlayerIndex] = useState<number>(-1);
   
-  const [shoe, setShoe] = useState<Card[]>(() => {
-    return shuffle(buildShoe(6));
-  });
-
-  const [playerHand, setPlayerHand] = useState<HandType>({
-    cards: [],
-    score: 0,
-    isSoft: false,
-    isBusted: false,
-    isBlackjack: false,
-  });
-
-  const [dealerHand, setDealerHand] = useState<HandType>({
-    cards: [],
-    score: 0,
-    isSoft: false,
-    isBusted: false,
-    isBlackjack: false,
-  });
-
-  const [stage, setStage] = useState<GameStage>('BETTING');
-  const [message, setMessage] = useState<string>('Place your bet to deal!');
-  
+  const [message, setMessage] = useState<string>('Welcome! Configure the game settings to start.');
   const [history, setHistory] = useState<RoundResult[]>(() => {
-    const saved = localStorage.getItem('bj_history');
+    const saved = localStorage.getItem('bj_multi_history');
     return saved ? JSON.parse(saved) : [];
   });
 
   const [confettiActive, setConfettiActive] = useState<boolean>(false);
-  const [showReshuffledBanner, setShowReshuffledBanner] = useState<boolean>(false);
+  const [gameWinner, setGameWinner] = useState<string | null>(null);
 
-  // Keep references of state for use inside async timers to prevent closure stale state bugs
-  const shoeRef = useRef<Card[]>(shoe);
-  const currentBetRef = useRef<number>(currentBet);
-  
+  // Sync history to local storage
   useEffect(() => {
-    shoeRef.current = shoe;
-  }, [shoe]);
-
-  useEffect(() => {
-    currentBetRef.current = currentBet;
-  }, [currentBet]);
-
-  // Sync state to local storage
-  useEffect(() => {
-    localStorage.setItem('bj_balance', balance.toString());
-  }, [balance]);
-
-  useEffect(() => {
-    localStorage.setItem('bj_history', JSON.stringify(history));
+    localStorage.setItem('bj_multi_history', JSON.stringify(history));
   }, [history]);
+
+  // --- Start Game Setup ---
+  const handleStartGame = (pCount: number, limit: number) => {
+    const initialPlayers: PlayerState[] = Array.from({ length: pCount }).map((_, i) => ({
+      id: i + 1,
+      name: `Player ${i + 1}`,
+      balance: INITIAL_BALANCE,
+      currentBet: 0,
+      previousBet: 0,
+      hand: { cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false },
+      dealerHand: { cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false },
+      shoe: shuffle(buildShoe(6)),
+      isBankrupt: false,
+    }));
+    setPlayers(initialPlayers);
+    setNumPlayers(pCount);
+    setWinLimit(limit);
+    setStage('BETTING');
+    setActiveBettorIndex(0);
+    setMessage(`Player 1's turn to bet. Choose chips!`);
+    setGameWinner(null);
+    playClickSound();
+  };
+
+  const handleRestartGame = useCallback(() => {
+    setStage('SETUP');
+    setPlayers([]);
+    setGameWinner(null);
+    setMessage('Welcome! Configure the game settings to start.');
+    playClickSound();
+  }, []);
 
   // --- Betting Handlers ---
   const handleAddBet = useCallback((amount: number) => {
     if (stage !== 'BETTING') return;
-    if (balance < amount) {
-      setMessage("Not enough balance!");
+    const player = players[activeBettorIndex];
+    if (player.balance < amount) {
+      setMessage('Not enough balance!');
       return;
     }
-    setBalance((prev) => prev - amount);
-    setCurrentBet((prev) => prev + amount);
-    setMessage(`Bet increased by $${amount}`);
-  }, [balance, stage]);
+    const nextPlayers = players.map((p, idx) =>
+      idx === activeBettorIndex
+        ? { ...p, balance: p.balance - amount, currentBet: p.currentBet + amount }
+        : p
+    );
+    setPlayers(nextPlayers);
+    setMessage(`${player.name}'s bet increased to $${player.currentBet + amount}`);
+  }, [stage, players, activeBettorIndex]);
 
   const handleClearBet = useCallback(() => {
     if (stage !== 'BETTING') return;
-    setBalance((prev) => prev + currentBet);
-    setCurrentBet(0);
-    setMessage('Bet cleared.');
-  }, [currentBet, stage]);
+    const player = players[activeBettorIndex];
+    const nextPlayers = players.map((p, idx) =>
+      idx === activeBettorIndex
+        ? { ...p, balance: p.balance + p.currentBet, currentBet: 0 }
+        : p
+    );
+    setPlayers(nextPlayers);
+    setMessage(`${player.name}'s bet cleared.`);
+  }, [stage, players, activeBettorIndex]);
 
-  const handleResetTable = useCallback(() => {
-    setPlayerHand({ cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false });
-    setDealerHand({ cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false });
-    setConfettiActive(false);
-    setStage('BETTING');
-    
-    // Check reshuffle rule
-    if (shoe.length < SHOE_RESHUFFLE_THRESHOLD) {
-      setShoe(shuffle(buildShoe(6)));
-      setShowReshuffledBanner(true);
-      setMessage('Shoe reshuffled (75% depleted)');
-      setTimeout(() => setShowReshuffledBanner(false), 3000);
+  // --- Advance Betting Sequence ---
+  const advanceBetting = (updatedPlayers: PlayerState[], currentIndex: number) => {
+    let nextIndex = currentIndex + 1;
+    while (nextIndex < updatedPlayers.length && updatedPlayers[nextIndex].isBankrupt) {
+      nextIndex++;
+    }
+
+    if (nextIndex < updatedPlayers.length) {
+      setActiveBettorIndex(nextIndex);
+      setMessage(`${updatedPlayers[nextIndex].name}'s turn to bet. Choose chips!`);
     } else {
-      setMessage('Place your bet to deal!');
+      // All active players placed bets. Deal!
+      setStage('DEALING');
+      setMessage('Dealing cards...');
+      triggerDealSequence(updatedPlayers);
     }
-  }, [shoe.length]);
-
-  const handleRebet = useCallback(() => {
-    if (stage !== 'ROUND_OVER') return;
-    if (previousBet === 0 || balance < previousBet) {
-      setMessage('Cannot rebet: insufficient bankroll.');
-      return;
-    }
-    
-    // Reset hands
-    setPlayerHand({ cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false });
-    setDealerHand({ cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false });
-    setConfettiActive(false);
-
-    // Rebet balance adjustments
-    const bet = previousBet;
-    setBalance((prev) => prev - bet);
-    setCurrentBet(bet);
-
-    // Trigger deal
-    setStage('DEALING');
-    setMessage('Dealing...');
-    
-    let tempShoe = [...shoe];
-    if (tempShoe.length < SHOE_RESHUFFLE_THRESHOLD) {
-      tempShoe = shuffle(buildShoe(6));
-      setShoe(tempShoe);
-      setShowReshuffledBanner(true);
-      setTimeout(() => setShowReshuffledBanner(false), 3000);
-    }
-
-    triggerDealSequence(tempShoe, bet);
-  }, [balance, previousBet, stage, shoe]);
-
-  // --- Core Game Deal Flow ---
-  const triggerDealSequence = (activeShoe: Card[], activeBet: number) => {
-    let currentShoe = [...activeShoe];
-    
-    const pCards: Card[] = [];
-    const dCards: Card[] = [];
-
-    // Step 1: Card 1 to Player (100ms)
-    setTimeout(() => {
-      const drawn = draw(currentShoe);
-      pCards.push(drawn.card);
-      currentShoe = drawn.remaining;
-      setPlayerHand(calculateHand(pCards));
-      playCardSound();
-    }, 100);
-
-    // Step 2: Card 2 to Dealer (400ms)
-    setTimeout(() => {
-      const drawn = draw(currentShoe);
-      dCards.push(drawn.card);
-      currentShoe = drawn.remaining;
-      setDealerHand(calculateHand(dCards));
-      playCardSound();
-    }, 400);
-
-    // Step 3: Card 3 to Player (700ms)
-    setTimeout(() => {
-      const drawn = draw(currentShoe);
-      pCards.push(drawn.card);
-      currentShoe = drawn.remaining;
-      setPlayerHand(calculateHand(pCards));
-      playCardSound();
-    }, 700);
-
-    // Step 4: Card 4 to Dealer (Face Down) (1000ms)
-    setTimeout(() => {
-      const drawn = draw(currentShoe);
-      // Mark as hidden
-      const hiddenCard = { ...drawn.card, isHidden: true };
-      dCards.push(hiddenCard);
-      currentShoe = drawn.remaining;
-      
-      // Compute dealer hand (ignores hidden card internally)
-      setDealerHand(calculateHand(dCards));
-      setShoe(currentShoe);
-      playCardSound();
-    }, 1000);
-
-    // Step 5: Check Blackjack and handoff to player (1300ms)
-    setTimeout(() => {
-      const currentPH = calculateHand(pCards);
-
-      // Check player Blackjack
-      if (currentPH.isBlackjack) {
-        // Dealer checks for Blackjack immediately
-        const finalDealerCards = dCards.map(c => ({ ...c, isHidden: false }));
-        setDealerHand(calculateHand(finalDealerCards));
-
-        const finalDH = calculateHand(finalDealerCards);
-        const { outcome, payoutFactor, message: winMsg } = evaluateOutcome(currentPH, finalDH);
-
-        resolveRound(outcome, payoutFactor, winMsg, currentPH, finalDH, activeBet);
-      } else {
-        setStage('PLAYER_TURN');
-        setMessage('Hit, Stand, or Double Down?');
-      }
-    }, 1300);
   };
 
-  const handleDeal = useCallback(() => {
-    if (stage !== 'BETTING' || currentBet === 0) return;
-    setStage('DEALING');
-    setMessage('Dealing...');
-    triggerDealSequence(shoe, currentBet);
-  }, [currentBet, stage, shoe]);
+  const handleConfirmBet = useCallback(() => {
+    if (stage !== 'BETTING') return;
+    const player = players[activeBettorIndex];
+    if (player.currentBet === 0) {
+      setMessage('Please place a bet of at least $5!');
+      return;
+    }
+    playClickSound();
+    advanceBetting(players, activeBettorIndex);
+  }, [stage, players, activeBettorIndex]);
+
+  // --- Core Game Deal Flow ---
+  const triggerDealSequence = (activePlayers: PlayerState[]) => {
+    let updated = [...activePlayers];
+    
+    // Draw initial 2 cards for players and dealer (from player's deck)
+    updated = updated.map((p) => {
+      if (p.isBankrupt || p.currentBet === 0) return p;
+
+      let currentShoe = [...p.shoe];
+      const pCards: Card[] = [];
+      const dCards: Card[] = [];
+
+      // Card 1 to Player
+      const d1 = draw(currentShoe);
+      pCards.push(d1.card);
+      currentShoe = d1.remaining;
+
+      // Card 1 to Dealer
+      const d2 = draw(currentShoe);
+      dCards.push(d2.card);
+      currentShoe = d2.remaining;
+
+      // Card 2 to Player
+      const d3 = draw(currentShoe);
+      pCards.push(d3.card);
+      currentShoe = d3.remaining;
+
+      // Card 2 to Dealer (Hidden)
+      const d4 = draw(currentShoe);
+      dCards.push({ ...d4.card, isHidden: true });
+      currentShoe = d4.remaining;
+
+      return {
+        ...p,
+        hand: calculateHand(pCards),
+        dealerHand: calculateHand(dCards),
+        shoe: currentShoe,
+      };
+    });
+
+    // Play deal sounds with slight staggered delays
+    const playersToDeal = updated.filter((p) => !p.isBankrupt && p.currentBet > 0);
+    playersToDeal.forEach((_, idx) => {
+      setTimeout(() => {
+        playCardSound();
+      }, idx * 200 + 100);
+    });
+
+    setTimeout(() => {
+      setPlayers(updated);
+
+      // Find first player turn
+      let firstPlayer = 0;
+      while (firstPlayer < updated.length && (updated[firstPlayer].isBankrupt || updated[firstPlayer].currentBet === 0)) {
+        firstPlayer++;
+      }
+
+      if (firstPlayer < updated.length) {
+        setStage('PLAYER_TURN');
+        setCurrentPlayerIndex(firstPlayer);
+        // If first player has Blackjack, auto-advance!
+        if (updated[firstPlayer].hand.isBlackjack) {
+          setMessage(`${updated[firstPlayer].name} has Blackjack!`);
+          setTimeout(() => {
+            advancePlayerTurn(updated, firstPlayer);
+          }, 1200);
+        } else {
+          setMessage(`${updated[firstPlayer].name}'s Turn! Hit, Stand, or Double Down?`);
+        }
+      } else {
+        setStage('ROUND_OVER');
+        setMessage('No active bets.');
+      }
+    }, playersToDeal.length * 200 + 300);
+  };
+
+  // --- Advance Turn Sequence ---
+  const advancePlayerTurn = (updatedPlayers: PlayerState[], currentIndex: number) => {
+    let nextIndex = currentIndex + 1;
+    while (nextIndex < updatedPlayers.length && (updatedPlayers[nextIndex].isBankrupt || updatedPlayers[nextIndex].currentBet === 0)) {
+      nextIndex++;
+    }
+
+    if (nextIndex < updatedPlayers.length) {
+      setCurrentPlayerIndex(nextIndex);
+      if (updatedPlayers[nextIndex].hand.isBlackjack) {
+        setMessage(`${updatedPlayers[nextIndex].name} has Blackjack!`);
+        setTimeout(() => {
+          advancePlayerTurn(updatedPlayers, nextIndex);
+        }, 1200);
+      } else {
+        setMessage(`${updatedPlayers[nextIndex].name}'s Turn! Hit, Stand, or Double Down?`);
+      }
+    } else {
+      // All player turns complete. Move to Dealer's sequential play
+      setStage('DEALER_TURN');
+      startDealerTurns(updatedPlayers);
+    }
+  };
+
+  // --- Dealer Sequential Drawing Loop ---
+  const startDealerTurns = (currentPlayers: PlayerState[]) => {
+    let idx = 0;
+    while (idx < currentPlayers.length && (currentPlayers[idx].isBankrupt || currentPlayers[idx].currentBet === 0)) {
+      idx++;
+    }
+
+    if (idx < currentPlayers.length) {
+      setDealerPlayerIndex(idx);
+      setMessage(`Dealer playing against ${currentPlayers[idx].name}...`);
+      setTimeout(() => {
+        runDealerTurnForPlayer(currentPlayers, idx);
+      }, 800);
+    } else {
+      setStage('ROUND_OVER');
+    }
+  };
+
+  const runDealerTurnForPlayer = (currentPlayers: PlayerState[], pIdx: number) => {
+    const player = currentPlayers[pIdx];
+    let dealerH = { ...player.dealerHand };
+
+    // 1. Reveal Dealer Hidden Card
+    if (dealerH.cards.some((c) => c.isHidden)) {
+      const revealedCards = dealerH.cards.map((c) => ({ ...c, isHidden: false }));
+      dealerH = calculateHand(revealedCards);
+      playCardSound();
+
+      const nextPlayers = currentPlayers.map((p, i) => (i === pIdx ? { ...p, dealerHand: dealerH } : p));
+      setPlayers(nextPlayers);
+
+      setTimeout(() => {
+        runDealerTurnForPlayer(nextPlayers, pIdx);
+      }, 800);
+      return;
+    }
+
+    // 2. Dealer draws cards if player hasn't busted
+    if (shouldDealerHit(dealerH) && !player.hand.isBusted) {
+      const drawn = draw(player.shoe);
+      const updatedCards = [...dealerH.cards, drawn.card];
+      const newDealerHand = calculateHand(updatedCards);
+      playCardSound();
+
+      const nextPlayers = currentPlayers.map((p, i) =>
+        i === pIdx ? { ...p, dealerHand: newDealerHand, shoe: drawn.remaining } : p
+      );
+      setPlayers(nextPlayers);
+
+      setTimeout(() => {
+        runDealerTurnForPlayer(nextPlayers, pIdx);
+      }, 800);
+    } else {
+      // 3. Dealer finished drawing. Resolve round results for this player
+      const { outcome, payoutFactor } = evaluateOutcome(player.hand, dealerH);
+      const balanceChange = player.currentBet + player.currentBet * payoutFactor;
+
+      let netGain = -player.currentBet;
+      if (outcome === 'WIN') netGain = player.currentBet;
+      else if (outcome === 'BLACKJACK') netGain = player.currentBet * 1.5;
+      else if (outcome === 'PUSH') netGain = 0;
+
+      const finalBalance = player.balance + balanceChange;
+      const resolvedPlayer: PlayerState = {
+        ...player,
+        balance: finalBalance,
+        previousBet: player.currentBet,
+        currentBet: 0,
+        isBankrupt: finalBalance < 5, // Cannot afford minimum $5 chip
+      };
+
+      const nextPlayers = currentPlayers.map((p, i) => (i === pIdx ? resolvedPlayer : p));
+      setPlayers(nextPlayers);
+
+      // Play outcome sounds
+      if (outcome === 'BLACKJACK' || outcome === 'WIN') {
+        playWinSound();
+        setConfettiActive(true);
+        setTimeout(() => setConfettiActive(false), 2000);
+      } else if (outcome === 'LOSS') {
+        playLoseSound();
+      } else {
+        playPushSound();
+      }
+
+      // Log to history
+      const now = new Date();
+      const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const newResult: RoundResult = {
+        id: Math.random().toString(36).substr(2, 9),
+        playerName: player.name,
+        outcome,
+        amount: netGain,
+        playerScore: player.hand.score,
+        dealerScore: dealerH.score,
+        timestamp,
+      };
+
+      setHistory((prev) => [newResult, ...prev]);
+
+      // Move to next player
+      let nextIdx = pIdx + 1;
+      while (nextIdx < nextPlayers.length && (nextPlayers[nextIdx].isBankrupt || nextPlayers[nextIdx].currentBet === 0)) {
+        nextIdx++;
+      }
+
+      if (nextIdx < nextPlayers.length) {
+        setDealerPlayerIndex(nextIdx);
+        setMessage(`Dealer playing against ${nextPlayers[nextIdx].name}...`);
+        setTimeout(() => {
+          runDealerTurnForPlayer(nextPlayers, nextIdx);
+        }, 800);
+      } else {
+        // All dealer rounds completed. Check win/loss targets
+        let hitTargetWinner: PlayerState | null = null;
+        for (const p of nextPlayers) {
+          if (p.balance >= winLimit) {
+            if (!hitTargetWinner || p.balance > hitTargetWinner.balance) {
+              hitTargetWinner = p;
+            }
+          }
+        }
+
+        if (hitTargetWinner) {
+          setStage('GAME_OVER');
+          setGameWinner(hitTargetWinner.name);
+          setMessage(`👑 ${hitTargetWinner.name} wins the game by reaching $${hitTargetWinner.balance.toLocaleString()}!`);
+        } else {
+          const allBankrupt = nextPlayers.every((p) => p.isBankrupt);
+          if (allBankrupt) {
+            setStage('GAME_OVER');
+            setMessage('All players went bankrupt! Game Over.');
+          } else {
+            setStage('ROUND_OVER');
+            setMessage('Round complete! Review results below.');
+          }
+        }
+      }
+    }
+  };
 
   // --- Player Hand Actions ---
   const handleHit = useCallback(() => {
     if (stage !== 'PLAYER_TURN') return;
-    
-    const drawn = draw(shoe);
-    const updatedCards = [...playerHand.cards, drawn.card];
+
+    const player = players[currentPlayerIndex];
+    const drawn = draw(player.shoe);
+    const updatedCards = [...player.hand.cards, drawn.card];
     const newHand = calculateHand(updatedCards);
-    
-    setPlayerHand(newHand);
-    setShoe(drawn.remaining);
+
     playCardSound();
 
-    if (newHand.isBusted) {
-      // Reveal dealer card and resolve loss
-      const revealedDealerCards = dealerHand.cards.map((c) => ({ ...c, isHidden: false }));
-      const newDealerHand = calculateHand(revealedDealerCards);
-      setDealerHand(newDealerHand);
+    const nextPlayers = players.map((p, idx) =>
+      idx === currentPlayerIndex ? { ...p, hand: newHand, shoe: drawn.remaining } : p
+    );
+    setPlayers(nextPlayers);
 
-      const { outcome, payoutFactor, message: winMsg } = evaluateOutcome(newHand, newDealerHand);
-      resolveRound(outcome, payoutFactor, winMsg, newHand, newDealerHand, currentBet);
+    if (newHand.isBusted) {
+      setMessage(`${player.name} Busted!`);
+      setTimeout(() => {
+        advancePlayerTurn(nextPlayers, currentPlayerIndex);
+      }, 1200);
     } else if (newHand.score === 21) {
-      // Automatic stand on 21
-      handleStandWithHand(newHand, drawn.remaining);
+      setMessage(`${player.name} stands on 21.`);
+      setTimeout(() => {
+        advancePlayerTurn(nextPlayers, currentPlayerIndex);
+      }, 1200);
     }
-  }, [stage, shoe, playerHand, dealerHand, currentBet]);
+  }, [stage, players, currentPlayerIndex]);
 
   const handleStand = useCallback(() => {
     if (stage !== 'PLAYER_TURN') return;
-    handleStandWithHand(playerHand, shoe);
-  }, [stage, playerHand, shoe]);
-
-  // Helper stand handler that can take a specific player hand state
-  const handleStandWithHand = (pHand: HandType, activeShoe: Card[]) => {
-    setStage('DEALER_TURN');
-    setMessage("Dealer's turn...");
-
-    // 1. Reveal dealer hidden card
-    const revealedDealerCards = dealerHand.cards.map((c) => ({ ...c, isHidden: false }));
-    const newDealerHand = calculateHand(revealedDealerCards);
-    setDealerHand(newDealerHand);
-    playCardSound();
-
-    // 2. Begin dealer drawing loop with delay
-    setTimeout(() => {
-      runDealerTurn(pHand, newDealerHand, activeShoe);
-    }, 800);
-  };
+    const player = players[currentPlayerIndex];
+    setMessage(`${player.name} stands.`);
+    advancePlayerTurn(players, currentPlayerIndex);
+  }, [stage, players, currentPlayerIndex]);
 
   const handleDoubleDown = useCallback(() => {
     if (stage !== 'PLAYER_TURN') return;
-    if (balance < currentBet) {
+    const player = players[currentPlayerIndex];
+    if (player.balance < player.currentBet) {
       setMessage('Not enough balance to double!');
       return;
     }
 
-    // Deduct double amount from balance and update bet
-    const extraBet = currentBet;
-    setBalance((prev) => prev - extraBet);
-    const doubledBet = currentBet * 2;
-    setCurrentBet(doubledBet);
+    const extraBet = player.currentBet;
+    const doubledBet = player.currentBet * 2;
 
-    // Draw exactly one card
-    const drawn = draw(shoe);
-    const updatedCards = [...playerHand.cards, drawn.card];
-    const newPH = calculateHand(updatedCards);
-    
-    setPlayerHand(newPH);
-    setShoe(drawn.remaining);
+    const drawn = draw(player.shoe);
+    const updatedCards = [...player.hand.cards, drawn.card];
+    const newHand = calculateHand(updatedCards);
+
     playCardSound();
 
-    if (newPH.isBusted) {
-      // Reveal dealer card and resolve loss
-      const revealedDealerCards = dealerHand.cards.map((c) => ({ ...c, isHidden: false }));
-      const newDealerHand = calculateHand(revealedDealerCards);
-      setDealerHand(newDealerHand);
+    const nextPlayers = players.map((p, idx) =>
+      idx === currentPlayerIndex
+        ? {
+            ...p,
+            hand: newHand,
+            shoe: drawn.remaining,
+            balance: p.balance - extraBet,
+            currentBet: doubledBet,
+          }
+        : p
+    );
+    setPlayers(nextPlayers);
 
-      const { outcome, payoutFactor, message: winMsg } = evaluateOutcome(newPH, newDealerHand);
-      resolveRound(outcome, payoutFactor, winMsg, newPH, newDealerHand, doubledBet);
+    if (newHand.isBusted) {
+      setMessage(`${player.name} Busted!`);
     } else {
-      // Stand immediately and resolve dealer
-      setStage('DEALER_TURN');
-      setMessage("Dealer's turn...");
-
-      const revealedDealerCards = dealerHand.cards.map((c) => ({ ...c, isHidden: false }));
-      const newDealerHand = calculateHand(revealedDealerCards);
-      setDealerHand(newDealerHand);
-      playCardSound();
-
-      setTimeout(() => {
-        runDealerTurn(newPH, newDealerHand, drawn.remaining, doubledBet);
-      }, 800);
+      setMessage(`${player.name} doubled and stands.`);
     }
-  }, [stage, shoe, playerHand, dealerHand, currentBet, balance]);
 
-  // --- Dealer AI Loop ---
-  const runDealerTurn = (pHand: HandType, dHand: HandType, activeShoe: Card[], activeBetVal?: number) => {
-    const betVal = activeBetVal !== undefined ? activeBetVal : currentBetRef.current;
-    
-    if (shouldDealerHit(dHand)) {
-      const drawn = draw(activeShoe);
-      const updatedCards = [...dHand.cards, drawn.card];
-      const newDealerHand = calculateHand(updatedCards);
-      
-      setDealerHand(newDealerHand);
-      setShoe(drawn.remaining);
-      playCardSound();
+    setTimeout(() => {
+      advancePlayerTurn(nextPlayers, currentPlayerIndex);
+    }, 1200);
+  }, [stage, players, currentPlayerIndex]);
 
-      setTimeout(() => {
-        runDealerTurn(pHand, newDealerHand, drawn.remaining, betVal);
-      }, 800);
+  // --- Reset Round betting ---
+  const startRoundBetting = (currentPlayers: PlayerState[]) => {
+    const resetPlayers = currentPlayers.map((p) => {
+      let tempShoe = [...p.shoe];
+      if (tempShoe.length < SHOE_RESHUFFLE_THRESHOLD) {
+        tempShoe = shuffle(buildShoe(6));
+      }
+      return {
+        ...p,
+        currentBet: 0,
+        hand: { cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false },
+        dealerHand: { cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false },
+        shoe: tempShoe,
+      };
+    });
+
+    setPlayers(resetPlayers);
+
+    let firstBettor = 0;
+    while (firstBettor < resetPlayers.length && resetPlayers[firstBettor].isBankrupt) {
+      firstBettor++;
+    }
+
+    if (firstBettor < resetPlayers.length) {
+      setStage('BETTING');
+      setActiveBettorIndex(firstBettor);
+      setMessage(`${resetPlayers[firstBettor].name}'s turn to bet. Choose chips!`);
     } else {
-      // Stand. Resolve winner
-      const { outcome, payoutFactor, message: winMsg } = evaluateOutcome(pHand, dHand);
-      resolveRound(outcome, payoutFactor, winMsg, pHand, dHand, betVal);
+      setStage('GAME_OVER');
+      setMessage('Game Over! All players are bankrupt.');
     }
   };
 
-  // --- Resolve Round & Payouts ---
-  const resolveRound = (
-    outcome: 'WIN' | 'LOSS' | 'PUSH' | 'BLACKJACK',
-    payoutFactor: number,
-    winMsg: string,
-    pHand: HandType,
-    dHand: HandType,
-    activeBet: number
-  ) => {
-    // Calculate Payout details
-    // If win: player gets back bet + payout (e.g. 1.0 * bet -> returns 2.0 * bet total).
-    // If Blackjack: player gets back bet + payout (e.g. 1.5 * bet -> returns 2.5 * bet total).
-    // If push: player gets back bet (1.0 * bet returned -> total return = 1.0 * bet).
-    // If loss: player gets back 0.
-    const balanceChange = activeBet + activeBet * payoutFactor;
+  const handleResetTable = useCallback(() => {
+    playClickSound();
+    startRoundBetting(players);
+  }, [players]);
 
-    setBalance((prev) => prev + balanceChange);
-    setPreviousBet(activeBet);
-    setCurrentBet(0);
-    setStage('ROUND_OVER');
-    setMessage(winMsg);
+  const handleRebet = useCallback(() => {
+    if (stage !== 'ROUND_OVER') return;
+    playClickSound();
 
-    // Play outcome sounds
-    if (outcome === 'BLACKJACK') {
-      playBlackjackSound();
-      setConfettiActive(true);
-    } else if (outcome === 'WIN') {
-      playWinSound();
-      setConfettiActive(true);
-    } else if (outcome === 'LOSS') {
-      playLoseSound();
-    } else if (outcome === 'PUSH') {
-      playPushSound();
+    const nextPlayers = players.map((p) => {
+      if (p.isBankrupt) return p;
+      const betVal = p.previousBet > 0 && p.balance >= p.previousBet ? p.previousBet : 0;
+      return {
+        ...p,
+        balance: p.balance - betVal,
+        currentBet: betVal,
+        hand: { cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false },
+        dealerHand: { cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false },
+      };
+    });
+
+    const activePlayers = nextPlayers.filter((p) => !p.isBankrupt);
+    const allBetted = activePlayers.every((p) => p.currentBet > 0);
+
+    if (allBetted && activePlayers.length > 0) {
+      setPlayers(nextPlayers);
+      setStage('DEALING');
+      setMessage('Dealing cards...');
+      setTimeout(() => {
+        triggerDealSequence(nextPlayers);
+      }, 500);
+    } else {
+      setPlayers(nextPlayers);
+      let firstBettor = 0;
+      while (firstBettor < nextPlayers.length && nextPlayers[firstBettor].isBankrupt) {
+        firstBettor++;
+      }
+      setStage('BETTING');
+      setActiveBettorIndex(firstBettor);
+      setMessage(`${nextPlayers[firstBettor].name}'s turn to bet. Choose chips!`);
     }
-
-    // Add result to history
-    const now = new Date();
-    const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    
-    // Net profit represents how much balance changed compared to before the bet was placed.
-    // E.g. if we bet $100 and win, profit = +100. If we lose, profit = -100.
-    let netGain = -activeBet;
-    if (outcome === 'WIN') netGain = activeBet;
-    else if (outcome === 'BLACKJACK') netGain = activeBet * 1.5;
-    else if (outcome === 'PUSH') netGain = 0;
-
-    const newResult: RoundResult = {
-      id: Math.random().toString(36).substr(2, 9),
-      outcome,
-      amount: netGain,
-      playerScore: pHand.score,
-      dealerScore: dHand.score,
-      timestamp,
-    };
-
-    setHistory((prev) => [newResult, ...prev]);
-  };
+  }, [players, stage]);
 
   const handleClearHistory = () => {
-    localStorage.removeItem('bj_history');
+    localStorage.removeItem('bj_multi_history');
     setHistory([]);
   };
 
-  // Bankruptcy Relief check / Game Over Reset
-  const handleBankruptcyRelief = () => {
-    playClickSound();
-    setBalance(INITIAL_BALANCE);
-    setPreviousBet(0);
-    setCurrentBet(0);
-    setPlayerHand({ cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false });
-    setDealerHand({ cards: [], score: 0, isSoft: false, isBusted: false, isBlackjack: false });
-    setMessage('Game restarted! Place your bet.');
-  };
+  // --- RENDER SCREENS ---
 
-  const isBroke = balance < 5 && currentBet === 0 && stage === 'BETTING';
+  if (stage === 'SETUP') {
+    return (
+      <div className="felt-table min-h-screen text-white flex flex-col justify-center items-center p-4 sm:p-6 relative">
+        <div className="absolute inset-0 bg-black/70 z-0" />
+
+        <div className="bg-[#fbfaf5] border-2 border-gold/50 rounded-3xl w-full max-w-md p-6 sm:p-8 z-10 text-center flex flex-col gap-6 shadow-2xl relative text-slate-950">
+          <div className="flex flex-col items-center">
+            <span className="text-4xl sm:text-5xl mb-2 filter drop-shadow-[0_0_10px_rgba(212,175,55,0.4)] animate-pulse">👑</span>
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-wider uppercase font-outfit text-slate-950">
+              Grand Royale
+            </h1>
+            <span className="text-xs sm:text-sm font-bold tracking-widest uppercase opacity-100 mt-1" style={{ color: '#9a7a1c' }}>
+              Blackjack Multiplayer
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-5 text-left">
+            {/* Number of Players Card Selector */}
+            <div className="flex flex-col gap-2.5">
+              <label className="text-xs font-bold text-slate-800 tracking-wider uppercase flex items-center gap-2">
+                <span>1.</span> Select Table Size
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { count: 1, label: 'Single', desc: '1 Seat', icon: '👤' },
+                  { count: 2, label: 'Duo', desc: '2 Seats', icon: '👥' },
+                  { count: 3, label: 'Trio', desc: '3 Seats', icon: '👥👤' },
+                  { count: 4, label: 'Quad', desc: '4 Seats', icon: '👑' },
+                ].map((item) => (
+                  <button
+                    key={item.count}
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setNumPlayers(item.count);
+                    }}
+                    className={`p-2.5 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all duration-300 border-2 ${
+                      numPlayers === item.count
+                        ? 'bg-gradient-to-b from-yellow-400 to-amber-500 text-slate-950 border-yellow-300 font-extrabold shadow-[0_0_15px_rgba(212,175,55,0.4)] scale-[1.03]'
+                        : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-300'
+                    }`}
+                  >
+                    <span className="text-lg sm:text-xl">{item.icon}</span>
+                    <span className={`font-extrabold font-outfit text-[11px] leading-tight text-center ${numPlayers === item.count ? 'text-slate-950' : 'text-slate-900'}`}>
+                      {item.label}
+                    </span>
+                    <span className={`text-[8px] font-extrabold uppercase tracking-wider ${numPlayers === item.count ? 'text-slate-800' : 'text-amber-800'}`}>
+                      {item.desc}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Winning Target Amount Tiers */}
+            <div className="flex flex-col gap-2.5 mt-1">
+              <label className="text-xs font-bold text-slate-800 tracking-wider uppercase flex items-center gap-2">
+                <span>2.</span> Set Victory Target
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { val: 2500, label: 'VIP Standard', icon: '💎' },
+                  { val: 5000, label: 'High Roller', icon: '👑' },
+                  { val: 10000, label: 'Royale Legend', icon: '🏆' },
+                ].map((tier) => (
+                  <button
+                    key={tier.val}
+                    type="button"
+                    onClick={() => {
+                      playClickSound();
+                      setWinLimit(tier.val);
+                    }}
+                    className={`p-2.5 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all duration-300 border-2 ${
+                      winLimit === tier.val
+                        ? 'bg-gradient-to-b from-yellow-400 to-amber-500 text-slate-950 border-yellow-300 font-extrabold shadow-[0_0_15px_rgba(212,175,55,0.4)] scale-[1.03]'
+                        : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-300'
+                    }`}
+                  >
+                    <span className="text-base">{tier.icon}</span>
+                    <span className={`font-bold text-[11px] ${winLimit === tier.val ? 'text-slate-950' : 'text-slate-900'}`}>{tier.label}</span>
+                    <span className={`text-[9px] font-extrabold ${winLimit === tier.val ? 'text-slate-900' : 'text-amber-800'}`}>${tier.val.toLocaleString()}</span>
+                  </button>
+                ))}
+              </div>
+              
+              {/* Custom Target Input */}
+              <div className="mt-1">
+                <div className="flex items-center bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-sm focus-within:border-amber-500 transition-colors">
+                  <span className="text-amber-800 font-bold mr-2 text-xs uppercase tracking-wider">Custom Limit:</span>
+                  <input
+                    type="number"
+                    min="1500"
+                    max="100000"
+                    step="500"
+                    value={winLimit}
+                    onChange={(e) => {
+                      const parsed = parseInt(e.target.value, 10);
+                      setWinLimit(isNaN(parsed) ? 5000 : parsed);
+                    }}
+                    className="w-full bg-transparent border-none text-slate-950 text-right focus:outline-none font-extrabold text-sm tracking-wide"
+                    placeholder="Enter limit..."
+                  />
+                </div>
+                <span className="text-[9px] text-slate-600 text-center block mt-1.5 font-semibold">
+                  First to reach victory target wins. Min target: $1,500.
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => handleStartGame(numPlayers, winLimit)}
+            className="w-full btn-action btn-primary text-xs py-3.5 rounded-2xl font-bold tracking-widest uppercase transition-all duration-300 hover:scale-[1.01] shadow-2xl text-slate-950"
+          >
+            Enter Grand Arena
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (stage === 'GAME_OVER') {
+    return (
+      <div className="felt-table min-h-screen text-white flex flex-col justify-center items-center p-6 relative">
+        <div className="absolute inset-0 bg-black/60 z-0" />
+
+        <div className="bg-[#051710] border-2 border-red-500/20 rounded-3xl w-full max-w-md p-6 sm:p-8 z-10 text-center flex flex-col gap-6 shadow-2xl relative">
+          <div className="flex flex-col items-center gap-3">
+            <span className="text-5xl animate-bounce">🏆</span>
+            <span className="text-lg sm:text-xl font-extrabold text-gold tracking-widest uppercase font-outfit">
+              Royale Game Over
+            </span>
+            <h2 className="text-2xl sm:text-3xl font-black font-outfit text-white leading-tight">
+              {gameWinner ? `${gameWinner} has won!` : 'All Players Went Bankrupt'}
+            </h2>
+            <p className="text-sm text-white/50 max-w-xs mt-2">
+              {gameWinner
+                ? `Successfully reached the target threshold of $${winLimit.toLocaleString()}!`
+                : 'No one has enough bankroll left to continue playing Blackjack.'}
+            </p>
+          </div>
+
+          <div className="flex flex-col items-center mt-4">
+            <button
+              onClick={handleRestartGame}
+              className="w-48 btn-action btn-primary text-xs py-3 font-extrabold tracking-widest uppercase rounded-2xl"
+            >
+              Start New Game
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Active Bettor/Player info for controls
+  const activeBettor = players[activeBettorIndex];
+  const activePlayer = players[currentPlayerIndex];
 
   return (
     <>
       {confettiActive && <Confetti />}
-      
+
       <Table
-        balance={balance}
-        currentBet={currentBet}
+        players={players}
+        activeBettorIndex={activeBettorIndex}
+        currentPlayerIndex={currentPlayerIndex}
+        dealerPlayerIndex={dealerPlayerIndex}
+        winLimit={winLimit}
         stage={stage}
         message={message}
-        dealerComponent={<Hand title="Dealer" hand={dealerHand} />}
-        playerComponent={
-          <div className="flex flex-col items-center w-full">
-            <Hand title="Player" hand={playerHand} />
-            {isBroke && (
-              <div className="flex flex-col items-center gap-3 mt-4 p-4 bg-red-950/40 border border-red-500/20 rounded-2xl backdrop-blur-md animate-pulse">
-                <span className="text-lg sm:text-xl font-extrabold text-red-500 tracking-widest uppercase font-outfit">
-                  🚨 Game Over 🚨
-                </span>
-                <p className="text-xs text-white/50 text-center max-w-[200px] leading-relaxed">
-                  You ran out of playable cash. Restart to play again.
-                </p>
-                <button
-                  onClick={handleBankruptcyRelief}
-                  className="btn-action btn-primary text-xs"
-                >
-                  Restart Game
-                </button>
-              </div>
-            )}
-          </div>
-        }
+        onRestartGame={handleRestartGame}
         chipsComponent={
-          <Chips
-            onAddBet={handleAddBet}
-            balance={balance}
-            disabled={stage !== 'BETTING'}
-          />
+          stage === 'BETTING' && activeBettor ? (
+            <Chips
+              onAddBet={handleAddBet}
+              balance={activeBettor.balance}
+              disabled={false}
+            />
+          ) : null
         }
         controlsComponent={
           <Controls
             stage={stage}
-            currentBet={currentBet}
-            balance={balance}
-            onDeal={handleDeal}
+            currentBet={
+              stage === 'BETTING' && activeBettor
+                ? activeBettor.currentBet
+                : stage === 'PLAYER_TURN' && activePlayer
+                ? activePlayer.currentBet
+                : 0
+            }
+            balance={
+              stage === 'BETTING' && activeBettor
+                ? activeBettor.balance
+                : stage === 'PLAYER_TURN' && activePlayer
+                ? activePlayer.balance
+                : 0
+            }
+            onDeal={handleConfirmBet} // Maps to confirm bet during betting phase
             onHit={handleHit}
             onStand={handleStand}
             onDoubleDown={handleDoubleDown}
@@ -472,16 +742,15 @@ export const App: React.FC = () => {
             onResetTable={handleResetTable}
           />
         }
-        historyComponent={<History history={history} onClearHistory={handleClearHistory} />}
+        historyComponent={
+          <History
+            history={history}
+            onClearHistory={handleClearHistory}
+          />
+        }
       />
-
-      {/* Decorative Reshuffle banner top pop */}
-      {showReshuffledBanner && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-yellow-500 text-slate-900 font-bold px-4 py-2 rounded-xl shadow-lg border border-yellow-300 z-50 text-xs tracking-wider uppercase animate-bounce">
-          🔄 Shoe Reshuffled
-        </div>
-      )}
     </>
   );
 };
+
 export default App;

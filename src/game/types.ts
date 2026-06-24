@@ -31,21 +31,36 @@ export interface Hand {
 }
 
 export type GameStage =
+  | 'SETUP'
   | 'BETTING'
   | 'DEALING'
   | 'PLAYER_TURN'
   | 'DEALER_TURN'
-  | 'ROUND_OVER';
+  | 'ROUND_OVER'
+  | 'GAME_OVER';
 
 export type OutcomeType = 'WIN' | 'LOSS' | 'PUSH' | 'BLACKJACK';
 
 export interface RoundResult {
   id: string;
+  playerName: string;
   outcome: OutcomeType;
   amount: number; // positive for win, negative for loss, 0 for push
   playerScore: number;
   dealerScore: number;
   timestamp: string;
+}
+
+export interface PlayerState {
+  id: number;
+  name: string;
+  balance: number;
+  currentBet: number;
+  previousBet: number;
+  hand: Hand;
+  dealerHand: Hand;
+  shoe: Card[];
+  isBankrupt: boolean;
 }
 
 export interface GameState {
@@ -58,3 +73,4 @@ export interface GameState {
   history: RoundResult[];
   message: string;
 }
+

@@ -149,8 +149,7 @@ export const History: React.FC<HistoryProps> = ({ history, onClearHistory }) => 
                       </span>
                     </div>
                     <div className="text-[11px] text-white/50 mt-0.5">
-                      You: <span className="font-semibold text-white/70">{round.playerScore}</span> | 
-                      Dealer: <span className="font-semibold text-white/70">{round.dealerScore}</span>
+                      <span className="font-semibold text-white/80">{round.playerName}</span>: {round.playerScore} | Dealer: {round.dealerScore}
                     </div>
                   </div>
                   <span className={`text-sm font-bold ${round.amount > 0 ? 'text-green-400' : round.amount < 0 ? 'text-red-400' : 'text-white/60'}`}>

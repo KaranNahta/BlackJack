@@ -4,6 +4,7 @@ import { Card as CardType } from '../game/types';
 interface CardProps {
   card: CardType;
   index: number;
+  compact?: boolean;
 }
 
 const SuitIcon: React.FC<{ suit: CardType['suit']; className?: string }> = ({ suit, className = 'w-5 h-5' }) => {
@@ -37,7 +38,7 @@ const SuitIcon: React.FC<{ suit: CardType['suit']; className?: string }> = ({ su
   }
 };
 
-export const Card: React.FC<CardProps> = ({ card, index }) => {
+export const Card: React.FC<CardProps> = ({ card, index, compact = false }) => {
   const isRed = card.suit === 'HEARTS' || card.suit === 'DIAMONDS';
   const displayVal = card.value;
   
@@ -46,7 +47,7 @@ export const Card: React.FC<CardProps> = ({ card, index }) => {
 
   return (
     <div 
-      className={`card-container animate-deal ${!card.isHidden ? 'is-flipped' : ''}`}
+      className={`card-container ${compact ? 'compact' : ''} animate-deal ${!card.isHidden ? 'is-flipped' : ''}`}
       style={{ animationDelay: delay }}
     >
       <div className="card-inner">
@@ -56,26 +57,26 @@ export const Card: React.FC<CardProps> = ({ card, index }) => {
         </div>
 
         {/* Card Front */}
-        <div className="card-face card-front border border-gray-200">
+        <div className="card-face card-front border border-gray-200" style={{ padding: compact ? '6px' : '12px' }}>
           {/* Top-Left Corner */}
           <div className="flex flex-col items-center leading-none">
-            <span className={`text-base sm:text-lg font-bold ${isRed ? 'text-red-600' : 'text-slate-800'}`}>
+            <span className={`font-bold ${compact ? 'text-xs sm:text-sm' : 'text-base sm:text-lg'} ${isRed ? 'text-red-600' : 'text-slate-800'}`}>
               {displayVal}
             </span>
-            <SuitIcon suit={card.suit} className="w-3.5 h-3.5 mt-0.5" />
+            <SuitIcon suit={card.suit} className={`${compact ? 'w-2.5 h-2.5 mt-0' : 'w-3.5 h-3.5 mt-0.5'}`} />
           </div>
 
           {/* Central Suit Graphic */}
           <div className="flex justify-center items-center opacity-90 my-auto">
-            <SuitIcon suit={card.suit} className="w-9 h-9 sm:w-12 sm:h-12" />
+            <SuitIcon suit={card.suit} className={compact ? 'w-6 h-6 sm:w-8 sm:h-8' : 'w-9 h-9 sm:w-12 sm:h-12'} />
           </div>
 
           {/* Bottom-Right Corner (Inverted) */}
           <div className="flex flex-col items-center leading-none self-end transform rotate-180">
-            <span className={`text-base sm:text-lg font-bold ${isRed ? 'text-red-600' : 'text-slate-800'}`}>
+            <span className={`font-bold ${compact ? 'text-xs sm:text-sm' : 'text-base sm:text-lg'} ${isRed ? 'text-red-600' : 'text-slate-800'}`}>
               {displayVal}
             </span>
-            <SuitIcon suit={card.suit} className="w-3.5 h-3.5 mt-0.5" />
+            <SuitIcon suit={card.suit} className={`${compact ? 'w-2.5 h-2.5 mt-0' : 'w-3.5 h-3.5 mt-0.5'}`} />
           </div>
         </div>
       </div>

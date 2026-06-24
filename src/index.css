@@ -100,10 +100,19 @@ h1, h2, h3, .font-outfit {
   position: relative;
 }
 
+.card-container.compact {
+  width: 70px;
+  height: 100px;
+}
+
 @media (min-width: 640px) {
   .card-container {
     width: 120px;
     height: 172px;
+  }
+  .card-container.compact {
+    width: 80px;
+    height: 115px;
   }
 }
 
@@ -339,6 +348,21 @@ h1, h2, h3, .font-outfit {
 
 .pulse-bet-circle {
   animation: pulseGold 2s infinite ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .confetti-container {
