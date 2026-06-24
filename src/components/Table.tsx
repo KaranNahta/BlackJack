@@ -128,9 +128,9 @@ export const Table: React.FC<TableProps> = ({
                       isFourPlayers || filteredArr.length === 3 ? 'p-3' : 'p-4'
                     } ${
                       isActivePlayer || isActiveBettor
-                        ? 'border-gold shadow-[0_0_20px_rgba(212,175,55,0.35)] scale-[1.02] bg-white/5'
+                        ? 'active-player-glow scale-[1.02]'
                         : isDealerActive
-                        ? 'border-purple-500 shadow-[0_0_20px_rgba(128,90,213,0.35)] scale-[1.02] bg-white/5'
+                        ? 'active-dealer-glow scale-[1.02]'
                         : player.isBankrupt
                         ? 'border-red-500/20 opacity-30 bg-red-950/5'
                         : 'border-white/5'

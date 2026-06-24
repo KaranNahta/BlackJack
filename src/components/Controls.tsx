@@ -51,7 +51,7 @@ export const Controls: React.FC<ControlsProps> = ({
         <button
           disabled={currentBet === 0}
           onClick={() => handleButtonClick(onDeal)}
-          className="btn-action btn-primary text-sm px-8"
+          className="btn-action btn-danger text-sm px-8"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
@@ -77,7 +77,7 @@ export const Controls: React.FC<ControlsProps> = ({
 
         <button
           onClick={() => handleButtonClick(onStand)}
-          className="btn-action btn-primary text-sm px-8"
+          className="btn-action btn-warning text-sm px-8"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
