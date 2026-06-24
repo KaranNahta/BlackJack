@@ -126,6 +126,7 @@ export default function App() {
       isBankrupt: false,
     }));
     setPlayers(initialPlayers);
+    setHistory([]);
 
     setWinLimit(limit);
     setStage('BETTING');
@@ -142,6 +143,7 @@ export default function App() {
     setCustomMode(false);
     setCustomError("");
     setPlayers([]);
+    setHistory([]);
     setGameWinner(null);
     setMessage('Welcome! Configure the game settings to start.');
     playClickSound();
@@ -1143,6 +1145,7 @@ export default function App() {
           <History
             history={history}
             onClearHistory={handleClearHistory}
+            playerNames={players.map((p) => p.name)}
           />
         }
       />

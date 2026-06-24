@@ -1,19 +1,32 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { RoundResult } from '../game/types';
 
 interface HistoryProps {
   history: RoundResult[];
   onClearHistory: () => void;
+  playerNames: string[];
 }
 
-export const History: React.FC<HistoryProps> = ({ history, onClearHistory }) => {
-  const totalRounds = history.length;
-  const wins = history.filter((r) => r.outcome === 'WIN' || r.outcome === 'BLACKJACK').length;
-  const losses = history.filter((r) => r.outcome === 'LOSS').length;
-  const pushes = history.filter((r) => r.outcome === 'PUSH').length;
-  const blackjacks = history.filter((r) => r.outcome === 'BLACKJACK').length;
+export const History: React.FC<HistoryProps> = ({ history, onClearHistory, playerNames }) => {
+  const [selectedPlayer, setSelectedPlayer] = useState<string>(playerNames[0] || '');
+
+  // Keep selectedPlayer in sync with playerNames
+  useEffect(() => {
+    if (playerNames.length > 0 && !playerNames.includes(selectedPlayer)) {
+      setSelectedPlayer(playerNames[0]);
+    }
+  }, [playerNames, selectedPlayer]);
+
+  const activePlayerName = selectedPlayer || playerNames[0] || '';
+  const playerHistory = history.filter((r) => r.playerName === activePlayerName);
+
+  const totalRounds = playerHistory.length;
+  const wins = playerHistory.filter((r) => r.outcome === 'WIN' || r.outcome === 'BLACKJACK').length;
+  const losses = playerHistory.filter((r) => r.outcome === 'LOSS').length;
+  const pushes = playerHistory.filter((r) => r.outcome === 'PUSH').length;
+  const blackjacks = playerHistory.filter((r) => r.outcome === 'BLACKJACK').length;
   
-  const netProfit = history.reduce((sum, r) => sum + r.amount, 0);
+  const netProfit = playerHistory.reduce((sum, r) => sum + r.amount, 0);
 
   // Calculate streaks
   let currentStreak = 0;
@@ -22,21 +35,19 @@ export const History: React.FC<HistoryProps> = ({ history, onClearHistory }) => 
 
   // Process history from oldest to newest to calculate max streak
   // and check the current active streak from newest to oldest
-  for (let i = history.length - 1; i >= 0; i--) {
-    const outcome = history[i].outcome;
+  for (let i = playerHistory.length - 1; i >= 0; i--) {
+    const outcome = playerHistory[i].outcome;
     if (outcome === 'WIN' || outcome === 'BLACKJACK') {
       tempStreak++;
       if (tempStreak > maxStreak) maxStreak = tempStreak;
     } else if (outcome === 'LOSS') {
       tempStreak = 0;
     }
-    // push doesn't break a streak in some rules, but let's count only absolute wins as expanding streak,
-    // and loss resetting it. Push keeps it neutral (does not reset, does not increment)
   }
 
   // Active current streak (most recent consecutive wins)
-  for (let i = 0; i < history.length; i++) {
-    const outcome = history[i].outcome;
+  for (let i = 0; i < playerHistory.length; i++) {
+    const outcome = playerHistory[i].outcome;
     if (outcome === 'WIN' || outcome === 'BLACKJACK') {
       currentStreak++;
     } else if (outcome === 'LOSS') {
@@ -51,11 +62,11 @@ export const History: React.FC<HistoryProps> = ({ history, onClearHistory }) => 
       <div className="flex justify-between items-center pb-4 border-b border-white/10">
         <h2 className="text-base sm:text-lg font-bold text-white tracking-wide flex items-center gap-2">
           <svg className="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2m0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
           </svg>
           Stats & History
         </h2>
-        {totalRounds > 0 && (
+        {history.length > 0 && (
           <button
             onClick={onClearHistory}
             className="text-xs text-white/40 hover:text-red-400 transition-colors font-semibold"
@@ -64,6 +75,25 @@ export const History: React.FC<HistoryProps> = ({ history, onClearHistory }) => 
           </button>
         )}
       </div>
+
+      {/* Player Tabs */}
+      {playerNames.length > 1 && (
+        <div className="flex gap-2 mt-3 overflow-x-auto pb-1 scrollbar-none">
+          {playerNames.map((name) => (
+            <button
+              key={name}
+              onClick={() => setSelectedPlayer(name)}
+              className={`px-3 py-1.5 rounded-xl font-bold text-[10px] sm:text-xs tracking-wider uppercase transition-all whitespace-nowrap ${
+                activePlayerName === name
+                  ? 'bg-gold text-black shadow-lg shadow-gold/20'
+                  : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white border border-white/5'
+              }`}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Stats Summary Grid */}
       <div className="grid grid-cols-2 gap-3 my-4">
@@ -120,13 +150,13 @@ export const History: React.FC<HistoryProps> = ({ history, onClearHistory }) => 
       {/* History Log list */}
       <h3 className="text-xs font-bold text-white/40 uppercase tracking-wider mb-2">Round History</h3>
       <div className="flex-1 overflow-y-auto pr-1">
-        {history.length === 0 ? (
+        {playerHistory.length === 0 ? (
           <div className="text-center text-white/30 py-8 font-semibold italic text-xs">
             No rounds played yet.
           </div>
         ) : (
           <div className="space-y-2">
-            {history.map((round) => {
+            {playerHistory.map((round) => {
               const profitText = round.amount >= 0 ? `+$${round.amount}` : `-$${Math.abs(round.amount)}`;
               const outcomeColor = 
                 round.outcome === 'BLACKJACK' ? 'text-amber-400 font-bold' :
